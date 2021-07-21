@@ -89,58 +89,7 @@ return depthStream;
 
 int main(int argc, char** argv)
 {
-    // >>>> Kalman Filter
-    int stateSize = 6;
-    int measSize = 4;
-    int contrSize = 0;
-
-    unsigned int type = CV_32F;
-    cv::KalmanFilter kf(stateSize, measSize, contrSize, type);
-
-    cv::Mat state(stateSize, 1, type);  // [x,y,v_x,v_y,w,h]
-    cv::Mat meas(measSize, 1, type);    // [z_x,z_y,z_w,z_h]
-    //cv::Mat procNoise(stateSize, 1, type)
-    // [E_x,E_y,E_v_x,E_v_y,E_w,E_h]
-
-    // Transition State Matrix A
-    // Note: set dT at each processing step!
-    // [ 1 0 dT 0  0 0 ]
-    // [ 0 1 0  dT 0 0 ]
-    // [ 0 0 1  0  0 0 ]
-    // [ 0 0 0  1  0 0 ]
-    // [ 0 0 0  0  1 0 ]
-    // [ 0 0 0  0  0 1 ]
-    cv::setIdentity(kf.transitionMatrix);
-
-    // Measure Matrix H
-    // [ 1 0 0 0 0 0 ]
-    // [ 0 1 0 0 0 0 ]
-    // [ 0 0 0 0 1 0 ]
-    // [ 0 0 0 0 0 1 ]
-    kf.measurementMatrix = cv::Mat::zeros(measSize, stateSize, type);
-    kf.measurementMatrix.at<float>(0) = 1.0f;
-    kf.measurementMatrix.at<float>(7) = 1.0f;
-    kf.measurementMatrix.at<float>(16) = 1.0f;
-    kf.measurementMatrix.at<float>(23) = 1.0f;
-
-    // Process Noise Covariance Matrix Q
-    // [ Ex   0   0     0     0    0  ]
-    // [ 0    Ey  0     0     0    0  ]
-    // [ 0    0   Ev_x  0     0    0  ]
-    // [ 0    0   0     Ev_y  0    0  ]
-    // [ 0    0   0     0     Ew   0  ]
-    // [ 0    0   0     0     0    Eh ]
-    //cv::setIdentity(kf.processNoiseCov, cv::Scalar(1e-2));
-    kf.processNoiseCov.at<float>(0) = 1e-2;
-    kf.processNoiseCov.at<float>(7) = 1e-2;
-    kf.processNoiseCov.at<float>(14) = 5.0f;
-    kf.processNoiseCov.at<float>(21) = 5.0f;
-    kf.processNoiseCov.at<float>(28) = 1e-2;
-    kf.processNoiseCov.at<float>(35) = 1e-2;
-
-    // Measures Noise Covariance Matrix R
-    cv::setIdentity(kf.measurementNoiseCov, cv::Scalar(1e-1));
-    // <<<< Kalman Filter
+    
     double ticks = 0;
     bool found = false;
     int notFoundCount = 0;
@@ -217,14 +166,15 @@ int main(int argc, char** argv)
         cv::cvtColor(blur, frmHsv, COLOR_BGR2HSV);
 
         cv::Mat rangeRes = cv::Mat::zeros(cImageBGR.size(), CV_8UC1);
-        cv::inRange(frmHsv, cv::Scalar(70, 100, 30),
-            cv::Scalar(95, 250, 190), rangeRes);
+        cv::inRange(frmHsv, cv::Scalar(15, 200, 25),
+            cv::Scalar(25, 250, 150), rangeRes);
 
         cv::erode(rangeRes, rangeRes, cv::Mat(), cv::Point(-1, -1), 2);
         cv::dilate(rangeRes, rangeRes, cv::Mat(), cv::Point(-1, -1), 2);
         
-        //cout << "value: " << int(frmHsv.at<Vec3b>(240, 320).val[0]) << " " << int(frmHsv.at<Vec3b>(240, 320).val[1]) << " " << int(frmHsv.at<Vec3b>(240, 320).val[2]) << endl;
+        cout << "value: " << int(frmHsv.at<Vec3b>(240, 320).val[0]) << " " << int(frmHsv.at<Vec3b>(240, 320).val[1]) << " " << int(frmHsv.at<Vec3b>(240, 320).val[2]) << endl;
         circle(rangeRes, Point(320, 240), 2, Scalar(255, 255, 255), 1);
+        circle(res, Point(320, 240), 2, Scalar(255, 255, 255), 1);
         cv::imshow("Threshold", rangeRes);
         
         
@@ -267,7 +217,7 @@ int main(int argc, char** argv)
                 cv::FONT_HERSHEY_SIMPLEX, 0.5, CV_RGB(20, 150, 20), 2);
         }
 
-
+        
 
         imshow("contour", res);
 
