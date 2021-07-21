@@ -6,7 +6,6 @@
 #include "LitDepthVisualizer.hpp"
 #include <chrono>
 #include <iostream>
-#include <iomanip>
 #include <key_handler.h>
 #include "opencv2/opencv.hpp"
 #include "opencv2/objdetect/objdetect.hpp"
@@ -15,7 +14,10 @@
 #include "opencv2/core/core.hpp"
 #include "opencv2/video/video.hpp"
 #include "opencv2/features2d/features2d.hpp"
+#include <vector>
 
+#define MIN_H_BLUE 200
+#define MAX_H_BLUE 300
 
 using namespace std;
 using namespace cv;
@@ -83,23 +85,66 @@ return depthStream;
 }
 
 
-void getcoord(int event, int x, int y, int flags, void* image)
-{
-    Mat* temp = reinterpret_cast<cv::Mat*>(image);
-    if (event == EVENT_LBUTTONDOWN)
-    {
-
-        cout << "pixel: " << x << ", " << y << endl;
-
-    }
-
-}
-
 
 
 int main(int argc, char** argv)
 {
-    
+    // >>>> Kalman Filter
+    int stateSize = 6;
+    int measSize = 4;
+    int contrSize = 0;
+
+    unsigned int type = CV_32F;
+    cv::KalmanFilter kf(stateSize, measSize, contrSize, type);
+
+    cv::Mat state(stateSize, 1, type);  // [x,y,v_x,v_y,w,h]
+    cv::Mat meas(measSize, 1, type);    // [z_x,z_y,z_w,z_h]
+    //cv::Mat procNoise(stateSize, 1, type)
+    // [E_x,E_y,E_v_x,E_v_y,E_w,E_h]
+
+    // Transition State Matrix A
+    // Note: set dT at each processing step!
+    // [ 1 0 dT 0  0 0 ]
+    // [ 0 1 0  dT 0 0 ]
+    // [ 0 0 1  0  0 0 ]
+    // [ 0 0 0  1  0 0 ]
+    // [ 0 0 0  0  1 0 ]
+    // [ 0 0 0  0  0 1 ]
+    cv::setIdentity(kf.transitionMatrix);
+
+    // Measure Matrix H
+    // [ 1 0 0 0 0 0 ]
+    // [ 0 1 0 0 0 0 ]
+    // [ 0 0 0 0 1 0 ]
+    // [ 0 0 0 0 0 1 ]
+    kf.measurementMatrix = cv::Mat::zeros(measSize, stateSize, type);
+    kf.measurementMatrix.at<float>(0) = 1.0f;
+    kf.measurementMatrix.at<float>(7) = 1.0f;
+    kf.measurementMatrix.at<float>(16) = 1.0f;
+    kf.measurementMatrix.at<float>(23) = 1.0f;
+
+    // Process Noise Covariance Matrix Q
+    // [ Ex   0   0     0     0    0  ]
+    // [ 0    Ey  0     0     0    0  ]
+    // [ 0    0   Ev_x  0     0    0  ]
+    // [ 0    0   0     Ev_y  0    0  ]
+    // [ 0    0   0     0     Ew   0  ]
+    // [ 0    0   0     0     0    Eh ]
+    //cv::setIdentity(kf.processNoiseCov, cv::Scalar(1e-2));
+    kf.processNoiseCov.at<float>(0) = 1e-2;
+    kf.processNoiseCov.at<float>(7) = 1e-2;
+    kf.processNoiseCov.at<float>(14) = 5.0f;
+    kf.processNoiseCov.at<float>(21) = 5.0f;
+    kf.processNoiseCov.at<float>(28) = 1e-2;
+    kf.processNoiseCov.at<float>(35) = 1e-2;
+
+    // Measures Noise Covariance Matrix R
+    cv::setIdentity(kf.measurementNoiseCov, cv::Scalar(1e-1));
+    // <<<< Kalman Filter
+    double ticks = 0;
+    bool found = false;
+    int notFoundCount = 0;
+
     astra::initialize();
 
     set_key_handler();
@@ -136,6 +181,10 @@ int main(int argc, char** argv)
     do
     {
 
+        double precTick = ticks;
+        ticks = (double)cv::getTickCount();
+
+        double dT = (ticks - precTick) / cv::getTickFrequency(); //seconds
 
         astra::Frame frame = reader.get_latest_frame();
         const astra::ColorFrame colorFrame = frame.get<astra::ColorFrame>();
@@ -145,49 +194,85 @@ int main(int argc, char** argv)
         cv::Mat mImageRGB(colorFrame.height(), colorFrame.width(), CV_8UC3, (void*)colorFrame.data());
         cv::Mat cImageBGR;
         cv::cvtColor(mImageRGB, cImageBGR, COLOR_RGB2BGR);
-        cv::Mat gray;
-        cv::cvtColor(mImageRGB, gray, COLOR_RGB2GRAY);
-       
+        Mat res;
+        cImageBGR.copyTo(res);
 
         cv::Mat mImageDepth(depthFrame.height(), depthFrame.width(), CV_16UC1, (void*)depthFrame.data());
         cv::Mat mScaledDepth;
-
         mImageDepth.convertTo(mScaledDepth, CV_8U, 255.0 / 3500); 
         
-        Mat transd;
-        warpPerspective(mScaledDepth, transd, trans, Size(640, 480));
-        cv::imshow("transd", transd);
+        Mat transdepth;
+        warpPerspective(mScaledDepth, transdepth, trans, Size(640, 480));
+        //cv::imshow("transd", transd);
         
 
-        cv::imshow( "Color Image", cImageBGR ); // RGB image
-        cv::imshow( "Depth Image", mScaledDepth ); // depth image
-        cv::imshow( "gray",gray);
+        //cv::imshow( "Color Image", cImageBGR ); // RGB image
+        //cv::imshow( "Depth Image", mScaledDepth ); // depth image
+        //cv::imshow( "gray",gray);
         //cv::imshow( "Depth Image 2", mImageDepth ); // contains depth data
 
+        cv::Mat blur;
+        cv::GaussianBlur(cImageBGR, blur, cv::Size(3, 3), 3.0, 3.0);
+        cv::Mat frmHsv;
+        cv::cvtColor(blur, frmHsv, COLOR_BGR2HSV);
 
+        cv::Mat rangeRes = cv::Mat::zeros(cImageBGR.size(), CV_8UC1);
+        cv::inRange(frmHsv, cv::Scalar(70, 100, 30),
+            cv::Scalar(95, 250, 190), rangeRes);
 
-        cv::Mat result;
-        cv::addWeighted(gray, 0.5, transd, 0.5, 0.0,result);
-        cv::imshow("overlayl", result);
-        cv::Mat result2;
-        cv::addWeighted(gray, 0.5, mScaledDepth, 0.5, 0.0, result2);
-        cv::imshow("overlayf", result2);
-
-        /*std::cout << "value: "
-        << mImageDepth.at<ushort>(240,320)
-        << std::endl;*/
+        cv::erode(rangeRes, rangeRes, cv::Mat(), cv::Point(-1, -1), 2);
+        cv::dilate(rangeRes, rangeRes, cv::Mat(), cv::Point(-1, -1), 2);
         
+        //cout << "value: " << int(frmHsv.at<Vec3b>(240, 320).val[0]) << " " << int(frmHsv.at<Vec3b>(240, 320).val[1]) << " " << int(frmHsv.at<Vec3b>(240, 320).val[2]) << endl;
+        circle(rangeRes, Point(320, 240), 2, Scalar(255, 255, 255), 1);
+        cv::imshow("Threshold", rangeRes);
+        
+        
+        // >>>>> Contours detection
+        vector<vector<cv::Point> > contours;
+        cv::findContours(rangeRes, contours, RETR_EXTERNAL,
+            CHAIN_APPROX_NONE);
+        // <<<<< Contours detection
 
-        /*std::cout << "colorStream -- hFov: "
-        << reader.stream<astra::ColorStream>().hFov()
-        << " vFov: "
-        << reader.stream<astra::ColorStream>().vFov()
-        << std::endl;
+        // >>>>> Filtering
+        vector<vector<cv::Point> > balls;
+        vector<cv::Rect> ballsBox;
+        for (size_t i = 0; i < contours.size(); i++)
+        {
+            cv::Rect bBox;
+            bBox = cv::boundingRect(contours[i]);
+            
 
-        std::cout << "depthStream -- hFov: "
-        << reader.stream<astra::DepthStream>().hFov()
-        << " vFov: "
-        << reader.stream<astra::DepthStream>().vFov()
+            // Searching for a bBox almost square
+            if (bBox.area() >= 500)
+            {
+                balls.push_back(contours[i]);
+                ballsBox.push_back(bBox);
+            }
+        }
+
+        for (size_t i = 0; i < balls.size(); i++)
+        {
+            cv::rectangle(res, ballsBox[i], CV_RGB(0, 255, 0), 2);
+
+            cv::Point center;
+            center.x = ballsBox[i].x + ballsBox[i].width / 2;
+            center.y = ballsBox[i].y + ballsBox[i].height / 2;
+
+
+            stringstream sstr;
+            sstr << "(" << center.x << "," << center.y << ")";
+            cv::putText(res, sstr.str(),
+                cv::Point(center.x + 3, center.y - 3),
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, CV_RGB(20, 150, 20), 2);
+        }
+
+
+
+        imshow("contour", res);
+
+        /*std::cout << "value: "    
+        << mImageDepth.at<ushort>(240,320)
         << std::endl;*/
         
         if (cv::waitKey(1) == 'q')
