@@ -12,8 +12,8 @@
 #include "opencv2/highgui/highgui.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
 #include "opencv2/core/core.hpp"
-#include "opencv2/video/video.hpp"
-#include "opencv2/features2d/features2d.hpp"
+#include "opencv2/features2d.hpp"
+#include "opencv2/video/background_segm.hpp"
 #include <vector>
 
 #define MIN_H_BLUE 200
@@ -122,18 +122,28 @@ int main(int argc, char** argv)
     depthmat[3] = Point2f(191, 348);
     
     Mat trans = getPerspectiveTransform(depthmat, colormat);
+
+
+    Ptr<BackgroundSubtractor> pmog2;
+    pmog2 = createBackgroundSubtractorMOG2(500,25.0,false);
     
+    SimpleBlobDetector::Params params;
+    params.filterByArea = true;
+    params.minArea = 400;
+    params.filterByCircularity = true;
+    params.minCircularity = 0.2;
+    params.filterByConvexity = true;
+    params.minConvexity = 0.87;
+    params.filterByInertia = true;
+    params.minInertiaRatio = 0.3;
+    Ptr<SimpleBlobDetector> detector = SimpleBlobDetector::create(params);
+
     colorStream.start();
     depthStream.start();
     
 
     do
     {
-
-        double precTick = ticks;
-        ticks = (double)cv::getTickCount();
-
-        double dT = (ticks - precTick) / cv::getTickFrequency(); //seconds
 
         astra::Frame frame = reader.get_latest_frame();
         const astra::ColorFrame colorFrame = frame.get<astra::ColorFrame>();
@@ -143,31 +153,50 @@ int main(int argc, char** argv)
         cv::Mat mImageRGB(colorFrame.height(), colorFrame.width(), CV_8UC3, (void*)colorFrame.data());
         cv::Mat cImageBGR;
         cv::cvtColor(mImageRGB, cImageBGR, COLOR_RGB2BGR);
-        Mat res;
-        cImageBGR.copyTo(res);
+
+        // BLOB DETECTION
+        Mat mask;
+        Mat maski;
+        pmog2->apply(cImageBGR, mask);
+        erode(mask, mask, Mat(), Point(-1, -1), 1);
+        dilate(mask, mask, Mat(), Point(-1, -1), 1);
+        bitwise_not(mask,maski);
+
+        vector<KeyPoint> keypoints;
+        detector->detect(maski, keypoints);
+        Mat blobs;
+        drawKeypoints(maski, keypoints, blobs, (255, 0, 0), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+        
 
         cv::Mat mImageDepth(depthFrame.height(), depthFrame.width(), CV_16UC1, (void*)depthFrame.data());
         cv::Mat mScaledDepth;
         mImageDepth.convertTo(mScaledDepth, CV_8U, 255.0 / 3500); 
         
+
         Mat transdepth;
         warpPerspective(mScaledDepth, transdepth, trans, Size(640, 480));
-        //cv::imshow("transd", transd);
+        //cv::imshow("transd", transdepth);
         
 
         //cv::imshow( "Color Image", cImageBGR ); // RGB image
         //cv::imshow( "Depth Image", mScaledDepth ); // depth image
         //cv::imshow( "gray",gray);
         //cv::imshow( "Depth Image 2", mImageDepth ); // contains depth data
+        imshow("mask", mask);
+        imshow("blobs", blobs); 
 
+        // COLOR DEPENDENT DETECTION
+        /*
+        Mat res;
+        cImageBGR.copyTo(res);
         cv::Mat blur;
         cv::GaussianBlur(cImageBGR, blur, cv::Size(3, 3), 3.0, 3.0);
         cv::Mat frmHsv;
         cv::cvtColor(blur, frmHsv, COLOR_BGR2HSV);
 
         cv::Mat rangeRes = cv::Mat::zeros(cImageBGR.size(), CV_8UC1);
-        cv::inRange(frmHsv, cv::Scalar(15, 200, 25),
-            cv::Scalar(25, 250, 150), rangeRes);
+        cv::inRange(frmHsv, cv::Scalar(40, 80, 50),
+            cv::Scalar(80, 170, 170), rangeRes);
 
         cv::erode(rangeRes, rangeRes, cv::Mat(), cv::Point(-1, -1), 2);
         cv::dilate(rangeRes, rangeRes, cv::Mat(), cv::Point(-1, -1), 2);
@@ -179,6 +208,7 @@ int main(int argc, char** argv)
         
         
         // >>>>> Contours detection
+
         vector<vector<cv::Point> > contours;
         cv::findContours(rangeRes, contours, RETR_EXTERNAL,
             CHAIN_APPROX_NONE);
@@ -192,6 +222,7 @@ int main(int argc, char** argv)
             cv::Rect bBox;
             bBox = cv::boundingRect(contours[i]);
             
+
 
             // Searching for a bBox almost square
             if (bBox.area() >= 500)
@@ -219,7 +250,7 @@ int main(int argc, char** argv)
 
         
 
-        imshow("contour", res);
+        imshow("contour", res);*/
 
         /*std::cout << "value: "    
         << mImageDepth.at<ushort>(240,320)
