@@ -15,9 +15,8 @@
 #include "opencv2/features2d.hpp"
 #include "opencv2/video/background_segm.hpp"
 #include <vector>
-
-#define MIN_H_BLUE 200
-#define MAX_H_BLUE 300
+#include <numeric>
+#include <algorithm>
 
 using namespace std;
 using namespace cv;
@@ -86,13 +85,49 @@ return depthStream;
 
 
 
+int polyRegression(const deque<Point2f>& center, const int yy) {
+    int n = center.size();
+    vector<float> x(n);
+    vector<float> y(n);
+    for (int i = 0; i < n; i++)
+    {
+        x[i] = center[i].x;
+        y[i] = center[i].y;
+
+    }
+    float xm = std::accumulate(x.begin(), x.end(), 0.0) / n;
+    float ym = std::accumulate(y.begin(), y.end(), 0.0) / n;
+    std::vector<float> x2(n);
+    for (int i = 0; i < n; i++)
+    {
+        x2[i] = pow(x[i], 2);
+    }
+    float x2m = std::accumulate(x2.begin(), x2.end(), 0.0) / n;
+    float x3m = std::inner_product(x2.begin(), x2.end(), x.begin(), 0.0) / n;
+    float x4m = std::inner_product(x2.begin(), x2.end(), x2.begin(), 0.0) / n;
+
+    float xym = std::inner_product(x.begin(), x.end(), y.begin(), 0.0) / n;
+    float x2ym = std::inner_product(x2.begin(), x2.end(), y.begin(), 0.0) / n;
+
+    float sxx = x2m - xm * xm;
+    float sxy = xym - xm * ym;
+    float sxx2 = x3m - xm * x2m;
+    float sx2x2 = x4m - x2m * x2m;
+    float sx2y = x2ym - x2m * ym;
+
+    float b = (sxy * sx2x2 - sx2y * sxx2) / (sxx * sx2x2 - sxx2 * sxx2);
+    float c = (sx2y * sxx - sxy * sxx2) / (sxx * sx2x2 - sxx2 * sxx2);
+    float a = ym - b * xm - c * x2m;
+
+ 
+    return (sqrt(b * b - 4 * c * (a - yy)) - b) / (2 * c);
+   
+    
+}
+
 
 int main(int argc, char** argv)
 {
-    
-    double ticks = 0;
-    bool found = false;
-    int notFoundCount = 0;
 
     astra::initialize();
 
@@ -129,19 +164,22 @@ int main(int argc, char** argv)
     
     SimpleBlobDetector::Params params;
     params.filterByArea = true;
-    params.minArea = 400;
+    params.minArea = 450;
     params.filterByCircularity = true;
-    params.minCircularity = 0.2;
+    params.minCircularity = 0.45;
     params.filterByConvexity = true;
-    params.minConvexity = 0.87;
-    params.filterByInertia = true;
-    params.minInertiaRatio = 0.3;
+    params.minConvexity = 0.9;
+
     Ptr<SimpleBlobDetector> detector = SimpleBlobDetector::create(params);
 
     colorStream.start();
     depthStream.start();
     
-
+    deque<Point2f> center;
+    int count = 0;
+    
+    int yy = 370;
+    int xx = -1;
     do
     {
 
@@ -164,10 +202,31 @@ int main(int argc, char** argv)
 
         vector<KeyPoint> keypoints;
         detector->detect(maski, keypoints);
-        Mat blobs;
-        drawKeypoints(maski, keypoints, blobs, (255, 0, 0), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+        Mat blob;
+        drawKeypoints(cImageBGR, keypoints, blob, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
         
+        if (keypoints.size() > 0) {
+                
+            center.push_front(keypoints[0].pt);
+            if (keypoints[0].pt.x >440&&count==0)
+            {
+               xx=polyRegression(center, yy);
+               cout << xx << " " << yy << endl;
+               count++;
+            }
+        }
+        else if ((keypoints.size()==0 ||center.size() > 7) && center.size()>0)
+            center.pop_back();
+        
+        drawKeypoints(cImageBGR, keypoints, blob,Scalar(0,0,255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+        if (center.size() > 5) {
 
+            for (int i = 1; i < 5; i++)
+            {
+                line(blob, Point2i(center[i - 1]), Point2i(center[i]), Scalar(0, 255, 0), 2);
+            }
+        }
+        if (xx != -1) { circle(blob, Point(xx, yy), 2, Scalar(255, 255, 0), 2); }
         cv::Mat mImageDepth(depthFrame.height(), depthFrame.width(), CV_16UC1, (void*)depthFrame.data());
         cv::Mat mScaledDepth;
         mImageDepth.convertTo(mScaledDepth, CV_8U, 255.0 / 3500); 
@@ -175,128 +234,26 @@ int main(int argc, char** argv)
 
         Mat transdepth;
         warpPerspective(mScaledDepth, transdepth, trans, Size(640, 480));
-        //cv::imshow("transd", transdepth);
+        cv::imshow("transd", transdepth);
         
 
         //cv::imshow( "Color Image", cImageBGR ); // RGB image
         //cv::imshow( "Depth Image", mScaledDepth ); // depth image
         //cv::imshow( "gray",gray);
         //cv::imshow( "Depth Image 2", mImageDepth ); // contains depth data
-        imshow("mask", mask);
-        imshow("blobs", blobs); 
-
-        // COLOR DEPENDENT DETECTION
-        /*
-        Mat res;
-        cImageBGR.copyTo(res);
-        cv::Mat blur;
-        cv::GaussianBlur(cImageBGR, blur, cv::Size(3, 3), 3.0, 3.0);
-        cv::Mat frmHsv;
-        cv::cvtColor(blur, frmHsv, COLOR_BGR2HSV);
-
-        cv::Mat rangeRes = cv::Mat::zeros(cImageBGR.size(), CV_8UC1);
-        cv::inRange(frmHsv, cv::Scalar(40, 80, 50),
-            cv::Scalar(80, 170, 170), rangeRes);
-
-        cv::erode(rangeRes, rangeRes, cv::Mat(), cv::Point(-1, -1), 2);
-        cv::dilate(rangeRes, rangeRes, cv::Mat(), cv::Point(-1, -1), 2);
-        
-        cout << "value: " << int(frmHsv.at<Vec3b>(240, 320).val[0]) << " " << int(frmHsv.at<Vec3b>(240, 320).val[1]) << " " << int(frmHsv.at<Vec3b>(240, 320).val[2]) << endl;
-        circle(rangeRes, Point(320, 240), 2, Scalar(255, 255, 255), 1);
-        circle(res, Point(320, 240), 2, Scalar(255, 255, 255), 1);
-        cv::imshow("Threshold", rangeRes);
-        
-        
-        // >>>>> Contours detection
-
-        vector<vector<cv::Point> > contours;
-        cv::findContours(rangeRes, contours, RETR_EXTERNAL,
-            CHAIN_APPROX_NONE);
-        // <<<<< Contours detection
-
-        // >>>>> Filtering
-        vector<vector<cv::Point> > balls;
-        vector<cv::Rect> ballsBox;
-        for (size_t i = 0; i < contours.size(); i++)
-        {
-            cv::Rect bBox;
-            bBox = cv::boundingRect(contours[i]);
-            
-
-
-            // Searching for a bBox almost square
-            if (bBox.area() >= 500)
-            {
-                balls.push_back(contours[i]);
-                ballsBox.push_back(bBox);
-            }
-        }
-
-        for (size_t i = 0; i < balls.size(); i++)
-        {
-            cv::rectangle(res, ballsBox[i], CV_RGB(0, 255, 0), 2);
-
-            cv::Point center;
-            center.x = ballsBox[i].x + ballsBox[i].width / 2;
-            center.y = ballsBox[i].y + ballsBox[i].height / 2;
-
-
-            stringstream sstr;
-            sstr << "(" << center.x << "," << center.y << ")";
-            cv::putText(res, sstr.str(),
-                cv::Point(center.x + 3, center.y - 3),
-                cv::FONT_HERSHEY_SIMPLEX, 0.5, CV_RGB(20, 150, 20), 2);
-        }
+        //imshow("mask", mask);
+        imshow("blobs", blob);
+        //imshow("mask", mask);
 
         
-
-        imshow("contour", res);*/
-
-        /*std::cout << "value: "    
-        << mImageDepth.at<ushort>(240,320)
-        << std::endl;*/
         
         if (cv::waitKey(1) == 'q')
             break;
-        /*else if (cv::waitKey(1) == 'p')
+        else if (cv::waitKey(1) == 'c')
         {
-            cv::waitKey(0);
-            Mat graycp;
-            Mat depthcp;
-            gray.copyTo(graycp); 
-            mScaledDepth.copyTo(depthcp);
-
-            vector<Vec3f> circlec;
-            vector<Vec3f> circled;
-            HoughCircles(graycp, circlec, HOUGH_GRADIENT, 1, 50, 100, 77, 0, 0);
-            HoughCircles(depthcp, circled, HOUGH_GRADIENT, 1, 50, 100, 30, 0, 0);
-            cout << "num: " << circlec.size() <<", "<<circled.size() << endl;
-            if (circled.size() > 0) {
-                int d1x = circled[0][0];
-                int d1y = circled[0][1];
-                int d1r = circled[0][2];
-
-                cv::circle(depthcp, Point(d1x, d1y), d1r, Scalar(255, 255, 255), 1);
-
-                cv::circle(depthcp, Point(d1x, d1y), 2, Scalar(255, 255, 255), 2);
-                
-                cv::imshow("cp2", depthcp);
-
-
-
-                cout << "depth coord: " << d1x << "," << d1y << ", rad: " << d1r << endl;
-                if (circlec.size() > 0) {
-                    int c1x = circlec[0][0];
-                    int c1y = circlec[0][1];
-                    int c1r = circlec[0][2];
-                    cv::circle(graycp, Point(c1x, c1y), c1r, Scalar(255, 255, 255), 1);
-                    cv::circle(graycp, Point(c1x, c1y), 2, Scalar(0,0,0), 2);
-                    cout << "color coord:" << c1x << ", " << c1y << ", rad: " << c1r << endl;
-                    cv::imshow("cp1", graycp);
-                }
-            }
-
-        }*/
+            if (count == 1) { count--; }
+            cout << count << endl;
+        }
 
 
         astra_update();
