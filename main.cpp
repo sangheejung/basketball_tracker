@@ -164,11 +164,11 @@ int main(int argc, char** argv)
     
     SimpleBlobDetector::Params params;
     params.filterByArea = true;
-    params.minArea = 450;
+    params.minArea = 800;
     params.filterByCircularity = true;
-    params.minCircularity = 0.45;
+    params.minCircularity = 0.35;
     params.filterByConvexity = true;
-    params.minConvexity = 0.9;
+    params.minConvexity = 0.8;
 
     Ptr<SimpleBlobDetector> detector = SimpleBlobDetector::create(params);
 
@@ -176,10 +176,13 @@ int main(int argc, char** argv)
     depthStream.start();
     
     deque<Point2f> center;
-    int count = 0;
+    deque<Point2f> centerz;
     
-    int yy = 370;
+    int count = 0;
+    int yy = -1;
     int xx = -1;
+    int zz = -1;
+
     do
     {
 
@@ -191,6 +194,15 @@ int main(int argc, char** argv)
         cv::Mat mImageRGB(colorFrame.height(), colorFrame.width(), CV_8UC3, (void*)colorFrame.data());
         cv::Mat cImageBGR;
         cv::cvtColor(mImageRGB, cImageBGR, COLOR_RGB2BGR);
+        cv::Mat mImageDepth(depthFrame.height(), depthFrame.width(), CV_16UC1, (void*)depthFrame.data());
+        cv::Mat mScaledDepth;
+        mImageDepth.convertTo(mScaledDepth, CV_8U, 255.0 / 3500);
+
+        Mat transdepth;
+        warpPerspective(mImageDepth, transdepth, trans, Size(640, 480));
+        Mat transcale;
+        warpPerspective(mScaledDepth, transcale, trans, Size(640, 480));
+
 
         // BLOB DETECTION
         Mat mask;
@@ -203,22 +215,47 @@ int main(int argc, char** argv)
         vector<KeyPoint> keypoints;
         detector->detect(maski, keypoints);
         Mat blob;
+        Mat transcp;
         drawKeypoints(cImageBGR, keypoints, blob, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+        drawKeypoints(transcale, keypoints, transcp, Scalar(255, 255,255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+        //cout << transdepth.at<ushort>(420, 520) << endl;
+        //circle(transcp, Point(520, 420), 2, (255, 255, 0), 2);
         
+        //여기부터 자세히 봐주셈
         if (keypoints.size() > 0) {
-                
+            
+            
             center.push_front(keypoints[0].pt);
-            if (keypoints[0].pt.x >440&&count==0)
+            centerz.push_front(Point2f((transdepth.at<ushort>(keypoints[0].pt.y, keypoints[0].pt.x)),keypoints[0].pt.y ));
+            //cout <<"coord: " <<centerz.begin()[0]  << endl;
+            if (keypoints[0].pt.x >440 && count == 0)
             {
-               xx=polyRegression(center, yy);
-               cout << xx << " " << yy << endl;
+                cout << "predict starting at: " << center.begin()[0] << ", " << transdepth.at<ushort>(keypoints[0].pt.y, keypoints[0].pt.x) << endl;
+                for (int i = 0; i < (430 - (keypoints[0].pt.y+40)) / 7; i++)
+                {
+                    int yp = keypoints[0].pt.y+40 + 7 * i;
+                    int zp = polyRegression(centerz, yp);
+                    int xp = polyRegression(center, yp);
+
+                    if (xp<640 && abs((transdepth.at<ushort>(yp,xp)-zp))<300)
+                    {
+                        xx = xp;
+                        yy = yp;
+                        zz = zp;
+                        
+                    }
+                }
+               
+               cout << "coord prediction: " << xx << ", " << yy << ", " << zz << endl;
                count++;
             }
         }
-        else if ((keypoints.size()==0 ||center.size() > 7) && center.size()>0)
+        else if ((keypoints.size() == 0 || center.size() > 7) && center.size() > 0)
+        {
             center.pop_back();
+            centerz.pop_back();
+        }
         
-        drawKeypoints(cImageBGR, keypoints, blob,Scalar(0,0,255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
         if (center.size() > 5) {
 
             for (int i = 1; i < 5; i++)
@@ -227,22 +264,17 @@ int main(int argc, char** argv)
             }
         }
         if (xx != -1) { circle(blob, Point(xx, yy), 2, Scalar(255, 255, 0), 2); }
-        cv::Mat mImageDepth(depthFrame.height(), depthFrame.width(), CV_16UC1, (void*)depthFrame.data());
-        cv::Mat mScaledDepth;
-        mImageDepth.convertTo(mScaledDepth, CV_8U, 255.0 / 3500); 
+        //여기까지
         
-
-        Mat transdepth;
-        warpPerspective(mScaledDepth, transdepth, trans, Size(640, 480));
-        cv::imshow("transd", transdepth);
         
 
         //cv::imshow( "Color Image", cImageBGR ); // RGB image
         //cv::imshow( "Depth Image", mScaledDepth ); // depth image
         //cv::imshow( "gray",gray);
         //cv::imshow( "Depth Image 2", mImageDepth ); // contains depth data
-        //imshow("mask", mask);
-        imshow("blobs", blob);
+        imshow("mask", mask);
+        imshow("blob", blob);
+        //imshow("depthblob", transcp);
         //imshow("mask", mask);
 
         
@@ -251,7 +283,10 @@ int main(int argc, char** argv)
             break;
         else if (cv::waitKey(1) == 'c')
         {
-            if (count == 1) { count--; }
+            
+            if (count == 1) { count--; 
+            xx = -1; yy = -1; zz = -1;
+            }
             cout << count << endl;
         }
 
