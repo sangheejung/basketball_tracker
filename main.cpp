@@ -164,9 +164,9 @@ int main(int argc, char** argv)
     
     SimpleBlobDetector::Params params;
     params.filterByArea = true;
-    params.minArea = 800;
+    params.minArea = 500;
     params.filterByCircularity = true;
-    params.minCircularity = 0.35;
+    params.minCircularity = 0.4;
     params.filterByConvexity = true;
     params.minConvexity = 0.8;
 
@@ -221,36 +221,42 @@ int main(int argc, char** argv)
         //cout << transdepth.at<ushort>(420, 520) << endl;
         //circle(transcp, Point(520, 420), 2, (255, 255, 0), 2);
         
-        //여기부터 자세히 봐주셈
         if (keypoints.size() > 0) {
             
             
             center.push_front(keypoints[0].pt);
             centerz.push_front(Point2f((transdepth.at<ushort>(keypoints[0].pt.y, keypoints[0].pt.x)),keypoints[0].pt.y ));
             //cout <<"coord: " <<centerz.begin()[0]  << endl;
-            if (keypoints[0].pt.x >440 && count == 0)
+            if (keypoints[0].pt.x < 250 && count == 0)
             {
-                cout << "predict starting at: " << center.begin()[0] << ", " << transdepth.at<ushort>(keypoints[0].pt.y, keypoints[0].pt.x) << endl;
-                for (int i = 0; i < (430 - (keypoints[0].pt.y+40)) / 7; i++)
+                cout << "predict starting at: " << center.begin()[0] << ", " << transdepth.at<ushort>(center.begin()[0].y, center.begin()[0].x) << endl;
+                
+                for (int i = 0; i < (430 - (center.begin()[0].y+40)) / 7; i++)
                 {
-                    int yp = keypoints[0].pt.y+40 + 7 * i;
-                    int zp = polyRegression(centerz, yp);
+                    
+                    int yp = center.begin()[0].y+40 + 7 * i;
                     int xp = polyRegression(center, yp);
+                    int zp = polyRegression(centerz, yp);
 
-                    if (xp<640 && abs((transdepth.at<ushort>(yp,xp)-zp))<300)
+
+                    if (xp>0 && zp>0)
                     {
-                        xx = xp;
-                        yy = yp;
-                        zz = zp;
-                        
+                        if (abs((transdepth.at<ushort>(yp, xp) - zp)) < 300)
+                        {
+                            xx = xp;
+                            yy = yp;
+                            zz = zp;
+
+                        }
                     }
+
                 }
                
                cout << "coord prediction: " << xx << ", " << yy << ", " << zz << endl;
                count++;
             }
         }
-        else if ((keypoints.size() == 0 || center.size() > 7) && center.size() > 0)
+        else if ((keypoints.size() == 0 || center.size() > 7) && center.size() > 0 && centerz.size()>0)
         {
             center.pop_back();
             centerz.pop_back();
@@ -264,8 +270,7 @@ int main(int argc, char** argv)
             }
         }
         if (xx != -1) { circle(blob, Point(xx, yy), 2, Scalar(255, 255, 0), 2); }
-        //여기까지
-        
+
         
 
         //cv::imshow( "Color Image", cImageBGR ); // RGB image
@@ -284,7 +289,7 @@ int main(int argc, char** argv)
         else if (cv::waitKey(1) == 'c')
         {
             
-            if (count == 1) { count--; 
+            if (count == 1) { count=0; 
             xx = -1; yy = -1; zz = -1;
             }
             cout << count << endl;
